@@ -1,12 +1,15 @@
+@font-face{font-family:Nunito;src:url(fonts/nunito.woff2) format("woff2");font-weight:200 1000;font-display:swap}
 :root{
-  --bg:#f6f4ef; --card:#ffffff; --ink:#1d2a2c; --muted:#5d6b6e; --line:#dcd8cf;
-  --accent:#0f6e6a; --accent-ink:#ffffff; --soft:#e3f1ef;
-  --good:#1f7a45; --good-bg:#e4f4ea; --bad:#a63a2b; --bad-bg:#fbe9e5; --warn:#8a5a00; --warn-bg:#fdf1d3;
+  --bg:#eaf5f2; --card:#ffffff; --ink:#12332f; --muted:#55716c; --line:#d3e6e1; --ring:#a9cfc7;
+  --accent:#178a78; --accent-ink:#ffffff; --soft:#dcf1ec; --chip:#f0f6f4; --navbg:#d7ebe6; --navon:#ffffff;
+  --good:#177a4a; --good-bg:#def5e8; --bad:#b3402f; --bad-bg:#fdebe6; --warn:#8a5a00; --warn-bg:#fff0c9;
+  --shadow:0 8px 26px rgba(18,51,47,.08);
 }
 @media (prefers-color-scheme:dark){
-  :root{ --bg:#141a1b; --card:#1e2728; --ink:#e9efee; --muted:#9fb0b0; --line:#334143;
-    --accent:#4fc3b9; --accent-ink:#06201e; --soft:#1f3a38;
-    --good:#7bd69c; --good-bg:#183525; --bad:#f09a8b; --bad-bg:#3d1f1a; --warn:#f0c768; --warn-bg:#3a2e12; }
+  :root{ --bg:#0f1f1c; --card:#182f2a; --ink:#e6f4f0; --muted:#9dbab3; --line:#2b4a43; --ring:#4a7a70;
+    --accent:#5fd1bb; --accent-ink:#06221d; --soft:#1f3d37; --chip:#21403a; --navbg:#182f2a; --navon:#2b4a43;
+    --good:#7bd69c; --good-bg:#183a2a; --bad:#f3a091; --bad-bg:#40221c; --warn:#f0c768; --warn-bg:#3d3113;
+    --shadow:0 8px 26px rgba(0,0,0,.25); }
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -79,3 +82,32 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 details summary{cursor:pointer;padding:8px 0;color:var(--accent);font-weight:600}
 [hidden]{display:none!important}
 select{display:block;width:100%;font:inherit;font-size:16px;padding:11px 12px;margin-top:4px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink)}
+
+/* ---- Scrub cap theme ---- */
+body{font-family:Nunito,ui-rounded,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:17.5px}
+.top{border-bottom:0}
+.brand{font-size:21px;font-weight:800}
+nav{background:var(--navbg);border-radius:999px;padding:4px;margin:10px 0 8px}
+nav button{border:0;border-radius:999px;padding:8px 4px;font-weight:700}
+nav button.on{background:var(--navon);color:var(--ink);box-shadow:0 1px 4px rgba(18,51,47,.12)}
+.card{border:0;border-radius:24px;padding:22px;box-shadow:var(--shadow)}
+h1{font-weight:800;font-size:23px}
+h2{font-weight:800}
+.tag{font-weight:800}
+.tag.plain{border:0;background:var(--chip)}
+.context{border-radius:16px;font-weight:700}
+ol.ctx li{border-radius:14px}
+.opt{border:2px solid var(--line);border-radius:18px;padding:14px 16px 14px 50px;position:relative;font-weight:600}
+.opt::before{content:"";position:absolute;left:16px;top:15px;width:20px;height:20px;border-radius:50%;border:2px solid var(--ring)}
+.opt:has(.num){padding-left:16px}
+.opt:has(.num)::before{display:none}
+.opt.right::before{background:var(--good);border-color:var(--good)}
+.opt.wrong::before{background:var(--bad);border-color:var(--bad)}
+.btn{border-radius:999px;padding:14px 26px;font-weight:800}
+.btn.ghost{border-width:2px}
+.fb{border-radius:20px;border-width:0}
+.crit{border-radius:999px}
+.empty{border-radius:18px;border-width:2px}
+.stat{border:0;border-radius:18px;box-shadow:var(--shadow)}
+.numrow input{border-width:2px;border-radius:16px}
+.skillrow .hd .muted{white-space:nowrap}

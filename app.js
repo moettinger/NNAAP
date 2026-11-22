@@ -283,7 +283,9 @@
   var SKILLS = root.NNAAP_SKILLS || [];
   var core = createCore(SKILLS, null, root.NNAAP_SAY);
   var SR = root.SpeechRecognition || root.webkitSpeechRecognition;
-  var canSpeak = !!SR && !!root.NNAAP_SAY;
+  /* Spoken practice is switched off for now. To bring it back: set SPOKEN_ENABLED to true and add <script src="data/say.js"></script> to index.html. */
+  var SPOKEN_ENABLED = false;
+  var canSpeak = SPOKEN_ENABLED && !!SR && !!root.NNAAP_SAY;
   var KEY = 'nnaap-progress-v1';
   var app = document.getElementById('app');
   var P = loadP();
@@ -494,13 +496,13 @@
       '<p>For each skill, tap <b>every</b> step in the order you would do it. You get no feedback until the end, and you cannot go back to a skill once you move on.</p>' +
       '<p class="muted small">Scoring here is a practice rule, not Credentia\'s exact formula: a skill is Unsatisfactory if a Critical Element Step is out of order, or if more than about 20% of its steps are out of order. On the real test you must pass all five.</p>' +
       '<div class="row"><button class="btn" id="start">Start the 30 minutes</button></div></div>' +
-      '<div class="card"><h1>Say it out loud</h1>' +
+      (!SPOKEN_ENABLED ? '' : '<div class="card"><h1>Say it out loud</h1>' +
       (canSpeak ? '<p>One skill at a time, no timer. You say every step in order and the phone listens, then shows what it heard and what you missed.</p>' +
         '<p class="muted small">Find a quiet spot and say every step, including the ones you would only do with your hands. The phone can mishear, so you can correct it before the score counts.</p>' +
         '<label class="small muted" for="pick">Skill</label><select id="pick"><option value="">Random (favors your weak spots)</option>' +
         SKILLS.map(function (sk) { return '<option value="' + sk.num + '">' + sk.num + '. ' + esc(sk.name) + '</option>'; }).join('') + '</select>' +
         '<div class="row"><button class="btn" id="speak">Start a spoken skill</button></div>'
-        : '<p class="muted small">This needs speech recognition, which this browser does not offer.</p>') + '</div>';
+        : '<p class="muted small">This needs speech recognition, which this browser does not offer.</p>') + '</div>');
     document.getElementById('start').onclick = function () { startMock(false); };
     if (canSpeak) document.getElementById('speak').onclick = function () { startSpoken(document.getElementById('pick').value); };
   }
