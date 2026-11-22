@@ -271,7 +271,9 @@
         heard: heard, words: toks.length, autoWrong: g.wrong };
     }
 
-    return { tokenize: tokenize, positions: positions, gradeSpoken: gradeSpoken, gens: gens, TYPES: TYPES, makeQuestion: makeQuestion, record: record, dealMock: dealMock, gradeOrder: gradeOrder, seq: seq, groups: groups, shuffle: shuffle, key: key };
+    function pickSkill(P) { return weighted(SKILLS, function (s) { return skillWeight(P, s); }); }
+
+    return { pickSkill: pickSkill, tokenize: tokenize, positions: positions, gradeSpoken: gradeSpoken, gens: gens, TYPES: TYPES, makeQuestion: makeQuestion, record: record, dealMock: dealMock, gradeOrder: gradeOrder, seq: seq, groups: groups, shuffle: shuffle, key: key };
   }
 
   if (typeof module !== 'undefined' && module.exports) { module.exports = { createCore: createCore }; }
@@ -491,30 +493,39 @@
       '<p>Five skills, 30 minutes, just like test day: Hand Hygiene plus four random skills, one of them a measurement skill.</p>' +
       '<p>For each skill, tap <b>every</b> step in the order you would do it. You get no feedback until the end, and you cannot go back to a skill once you move on.</p>' +
       '<p class="muted small">Scoring here is a practice rule, not Credentia\'s exact formula: a skill is Unsatisfactory if a Critical Element Step is out of order, or if more than about 20% of its steps are out of order. On the real test you must pass all five.</p>' +
-      '<div class="row"><button class="btn" id="start">Tap-to-order exam</button>' + (canSpeak ? '<button class="btn" id="speak">Spoken exam</button>' : '') + '</div>' +
-      (canSpeak ? '<p class="muted small" style="margin-top:14px"><b>Spoken exam:</b> you say the steps out loud and the phone listens. Find a quiet spot, speak in full phrases, and say every step, including the ones you would only do with your hands. The phone can mishear, so you get to correct it before the score counts.</p>'
-        : '<p class="muted small" style="margin-top:14px">The spoken exam needs speech recognition, which this browser does not offer.</p>') + '</div>';
+      '<div class="row"><button class="btn" id="start">Start the 30 minutes</button></div></div>' +
+      '<div class="card"><h1>Say it out loud</h1>' +
+      (canSpeak ? '<p>One skill at a time, no timer. You say every step in order and the phone listens, then shows what it heard and what you missed.</p>' +
+        '<p class="muted small">Find a quiet spot and say every step, including the ones you would only do with your hands. The phone can mishear, so you can correct it before the score counts.</p>' +
+        '<label class="small muted" for="pick">Skill</label><select id="pick"><option value="">Random (favors your weak spots)</option>' +
+        SKILLS.map(function (sk) { return '<option value="' + sk.num + '">' + sk.num + '. ' + esc(sk.name) + '</option>'; }).join('') + '</select>' +
+        '<div class="row"><button class="btn" id="speak">Start a spoken skill</button></div>'
+        : '<p class="muted small">This needs speech recognition, which this browser does not offer.</p>') + '</div>';
     document.getElementById('start').onclick = function () { startMock(false); };
-    if (canSpeak) document.getElementById('speak').onclick = function () { startMock(true); };
+    if (canSpeak) document.getElementById('speak').onclick = function () { startSpoken(document.getElementById('pick').value); };
   }
 
   function startMock(spoken) {
     mock = { skills: core.dealMock(), i: 0, answers: [], end: Date.now() + 30 * 60 * 1000, running: true, warned: false, spoken: !!spoken, said: [{}, {}, {}, {}, {}] };
     mock.tick = setInterval(tickMock, 1000);
-    if (spoken) { keepAwake(); showSpokenSkill(); } else showMockSkill();
+    showMockSkill();
+  }
+  function startSpoken(num) {
+    var sk = num ? SKILLS.filter(function (s) { return String(s.num) === String(num); })[0] : core.pickSkill(P);
+    if (!num && mock && mock.spoken && mock.skills[0] === sk) sk = core.pickSkill(P);
+    stopMock();
+    mock = { skills: [sk], i: 0, answers: [], running: true, spoken: true, said: [{}], picked: num || '' };
+    keepAwake(); window.scrollTo(0, 0); showSpokenSkill();
   }
   function stopMock() { if (mock) { clearInterval(mock.tick); mock.running = false; stopListening(); if (mock.wake) { try { mock.wake.release(); } catch (e) {} mock.wake = null; } } }
   function keepAwake() { try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (w) { if (mock) mock.wake = w; }, function () {}); } catch (e) {} }
   function fmt(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
   function tickMock() {
-    if (!mock || !mock.running) return;
+    if (!mock || !mock.running || mock.spoken) return;
     var left = mock.end - Date.now(), t = document.getElementById('timer');
     if (t) { t.textContent = fmt(left); t.classList.toggle('low', left <= 5 * 60 * 1000); }
     if (left <= 5 * 60 * 1000 && !mock.warned) { mock.warned = true; var n = document.getElementById('fivemin'); if (n) n.hidden = false; }
-    if (left <= 0) {
-      if (mock.spoken) { mock.answers[mock.i] = mock.keptText ? mock.keptText() : ''; stopMock(); showSpokenResults(true); }
-      else { if (mock.widget) mock.answers[mock.i] = mock.widget.get(); finishMock(true); }
-    }
+    if (left <= 0) { if (mock.widget) mock.answers[mock.i] = mock.widget.get(); finishMock(true); }
   }
 
   function showMockSkill() {
@@ -597,11 +608,10 @@
   function showSpokenSkill() {
     var sk = mock.skills[mock.i];
     app.innerHTML = '';
-    var card = h('<div class="card"><div class="meta"><span class="tag">Skill ' + (mock.i + 1) + ' of 5</span><span class="tag plain">Time left <span class="timer" id="timer">' + fmt(mock.end - Date.now()) + '</span></span></div>' +
-      '<p id="fivemin" class="crit" ' + (mock.warned ? '' : 'hidden') + '>Five minutes or less remaining.</p>' +
+    var card = h('<div class="card"><div class="meta"><span class="tag">Spoken skill</span><span class="tag plain">Skill ' + sk.num + '</span></div>' +
       '<h1>' + esc(sk.name) + '</h1>' +
       '<p class="muted small">Say every step out loud, in the order you would do it. Pauses are fine.</p>' +
-      '<div class="row" style="margin-top:0"><button class="btn" id="talk">Start talking</button><button class="btn ghost" id="next" hidden>' + (mock.i < 4 ? 'Done with this skill' : 'Done, finish exam') + '</button></div>' +
+      '<div class="row" style="margin-top:0"><button class="btn" id="talk">Start talking</button><button class="btn ghost" id="next" hidden>Done, check my steps</button></div>' +
       '<p id="state" class="small muted" style="margin-top:12px"></p><div class="context small" id="live" hidden></div></div>').firstChild;
     app.appendChild(card);
     var talk = card.querySelector('#talk'), next = card.querySelector('#next'), state = card.querySelector('#state'), live = card.querySelector('#live');
@@ -619,7 +629,7 @@
     next.onclick = function () {
       var t = (kept + ' ' + currentTranscript()).trim();
       stopListening(); ear = null; mock.answers[mock.i] = t;
-      if (mock.i < 4) { mock.i++; window.scrollTo(0, 0); showSpokenSkill(); } else { stopMock(); showSpokenResults(false); }
+      stopMock(); showSpokenResults(false);
     };
     mock.keptText = function () { return (kept + ' ' + currentTranscript()).trim(); };
   }
@@ -628,8 +638,7 @@
     ear = null;
     var results = mock.skills.map(function (sk, i) { return { sk: sk, g: core.gradeSpoken(sk, mock.answers[i] || '', mock.said[i]) }; });
     var passed = results.filter(function (r) { return r.g.pass; }).length;
-    var html = '<div class="card"><h1>' + (passed === 5 ? 'All five Satisfactory. That is a pass.' : passed + ' of 5 Satisfactory. The real test needs all five.') + '</h1>' +
-      (timedOut ? '<p class="crit">Time ran out.</p>' : '') +
+    var html = '<div class="card"><h1>' + (passed ? 'Satisfactory.' : 'Unsatisfactory, for now.') + '</h1>' +
       '<p class="muted small">The phone matches what it heard against each step, so it can miss things. If you did say a step in the right place, tap <b>I said this</b> and the score updates. Be honest with yourself: the evaluator will not give you the benefit of the doubt.</p>';
     results.forEach(function (r) { html += '<div class="result"><span><b>' + esc(r.sk.name) + '</b></span><span class="pill ' + (r.g.pass ? 's' : 'u') + '">' + (r.g.pass ? 'Satisfactory' : 'Unsatisfactory') + '</span></div>'; });
     html += '</div>';
@@ -650,7 +659,7 @@
       html += '<details><summary class="small">What the phone heard</summary><p class="small">' + (esc(mock.answers[i] || '') || '<i>Nothing.</i>') + '</p></details>' +
         '<details><summary class="small">Full sheet order</summary><ol class="small">' + seqs.map(function (s) { return '<li>' + stepHtml(s) + '</li>'; }).join('') + '</ol></details></div>';
     });
-    html += '<div class="row"><button class="btn" id="save">Save to my weak spots</button><button class="btn ghost" id="again">New mock exam</button></div>';
+    html += '<div class="row"><button class="btn" id="save">Save to my weak spots</button><button class="btn ghost" id="again">Another skill</button><button class="btn ghost" id="retry">Try this one again</button></div>';
     var y = window.scrollY;
     app.innerHTML = html;
     if (mock.reviewed) window.scrollTo(0, y); else { window.scrollTo(0, 0); mock.reviewed = true; }
@@ -664,7 +673,8 @@
       results.forEach(function (r) { core.record(P, { skill: r.sk, steps: r.g.wrong }, r.g.pass); });
       saveP(); sv.disabled = true; sv.textContent = 'Saved';
     };
-    document.getElementById('again').onclick = showMockIntro;
+    document.getElementById('again').onclick = function () { startSpoken(''); };
+    document.getElementById('retry').onclick = function () { startSpoken(mock.skills[0].num); };
   }
 
   showQuestion();
