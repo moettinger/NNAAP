@@ -3,8 +3,8 @@
   'use strict';
 
   /* ---------- Core (pure logic, also loadable in Node for tests) ---------- */
-  function createCore(SKILLS, rng) {
-    rng = rng || Math.random;
+  function createCore(SKILLS, rng, SAY) {
+    rng = rng || Math.random; SAY = SAY || {};
     var rand = function (n) { return Math.floor(rng() * n); };
     var pick = function (a) { return a[rand(a.length)]; };
     var shuffle = function (a) {
@@ -223,7 +223,55 @@
       return { out: out, missed: missed, wrong: wrong, allowed: allowed, critFail: critFail, pass: !critFail && wrong.length <= allowed };
     }
 
-    return { gens: gens, TYPES: TYPES, makeQuestion: makeQuestion, record: record, dealMock: dealMock, gradeOrder: gradeOrder, seq: seq, groups: groups, shuffle: shuffle, key: key };
+    /* ---- Spoken exam: find which steps were said, and where, in a speech-to-text transcript ---- */
+    var WINDOW = 14;
+    /* "washcloth" would look like the verb "wash", and "clean washcloth / clean gloves" like the verb "clean": normalise both away. */
+    var ADJ_CLEAN = /^(washcloth|cloth|area|spot|part|glov|technique|towel|dry|gown|linen|side|section|one$|hands?$)/;
+    function tokenize(t) {
+      var raw = String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean), out = [];
+      for (var i = 0; i < raw.length; i++) {
+        if (raw[i] === 'clean' && raw[i + 1] && ADJ_CLEAN.test(raw[i + 1])) continue;
+        /* "before washing", "after removing": a reference to another step, not doing it */
+        if (i && /^(before|after|while|until)$/.test(raw[i - 1]) && /ing$/.test(raw[i])) continue;
+        out.push(raw[i].replace(/^washcloths?$/, 'cloth'));
+      }
+      return out;
+    }
+    /* a term is alternatives split by "|"; each is a prefix match, or an exact match when it ends with "$" */
+    function termHit(term, tok) {
+      return term.split('|').some(function (a) { return a && (a.charAt(a.length - 1) === '$' ? tok === a.slice(0, -1) : tok.indexOf(a) === 0); });
+    }
+    function positions(tokens, patterns) {
+      var out = {};
+      (patterns || []).forEach(function (pat) {
+        for (var i = 0; i < tokens.length; i++) {
+          if (!pat.some(function (t) { return termHit(t, tokens[i]); })) continue;
+          var win = tokens.slice(i, i + WINDOW);
+          if (pat.every(function (t) { return win.some(function (w) { return termHit(t, w); }); })) out[i] = 1;
+        }
+      });
+      return Object.keys(out).map(Number).sort(function (a, b) { return a - b; });
+    }
+    /* said: {stepN: true} = she says the phone misheard and she did say it in the right place */
+    function gradeSpoken(sk, transcript, said) {
+      said = said || {};
+      var toks = tokenize(transcript), ss = seq(sk), prev = -1, pos = {}, heard = {};
+      sk.steps.forEach(function (s) { var p = positions(toks, SAY[key(sk, s)]); if (p.length) heard[s.n] = p; });
+      ss.forEach(function (s) {
+        var p = heard[s.n]; if (!p) return;
+        var ok = p.filter(function (x) { return x >= prev; });
+        if (ok.length) { pos[s.n] = ok[0]; prev = ok[0]; } else pos[s.n] = p[0];
+      });
+      var placed = ss.filter(function (s) { return pos[s.n] != null; }).sort(function (a, b) { return (pos[a.n] - pos[b.n]) || (a.n - b.n); });
+      var g = gradeOrder(sk, placed);
+      var out = g.out.filter(function (s) { return !said[s.n]; }), missed = g.missed.filter(function (s) { return !said[s.n]; });
+      var wrong = out.concat(missed).sort(function (a, b) { return a.n - b.n; });
+      var critFail = wrong.some(function (s) { return s.critical; });
+      return { out: out, missed: missed, wrong: wrong, allowed: g.allowed, critFail: critFail, pass: !critFail && wrong.length <= g.allowed,
+        heard: heard, words: toks.length, autoWrong: g.wrong };
+    }
+
+    return { tokenize: tokenize, positions: positions, gradeSpoken: gradeSpoken, gens: gens, TYPES: TYPES, makeQuestion: makeQuestion, record: record, dealMock: dealMock, gradeOrder: gradeOrder, seq: seq, groups: groups, shuffle: shuffle, key: key };
   }
 
   if (typeof module !== 'undefined' && module.exports) { module.exports = { createCore: createCore }; }
@@ -231,7 +279,9 @@
 
   /* ------------------------------- UI ------------------------------- */
   var SKILLS = root.NNAAP_SKILLS || [];
-  var core = createCore(SKILLS);
+  var core = createCore(SKILLS, null, root.NNAAP_SAY);
+  var SR = root.SpeechRecognition || root.webkitSpeechRecognition;
+  var canSpeak = !!SR && !!root.NNAAP_SAY;
   var KEY = 'nnaap-progress-v1';
   var app = document.getElementById('app');
   var P = loadP();
@@ -436,28 +486,35 @@
 
   /* ----------------------------- Mock exam ----------------------------- */
   function showMockIntro() {
-    if (mock && mock.running) { showMockSkill(); return; }
+    if (mock && mock.running) { if (mock.spoken) showSpokenSkill(); else showMockSkill(); return; }
     app.innerHTML = '<div class="card"><h1>Mock exam</h1>' +
       '<p>Five skills, 30 minutes, just like test day: Hand Hygiene plus four random skills, one of them a measurement skill.</p>' +
       '<p>For each skill, tap <b>every</b> step in the order you would do it. You get no feedback until the end, and you cannot go back to a skill once you move on.</p>' +
       '<p class="muted small">Scoring here is a practice rule, not Credentia\'s exact formula: a skill is Unsatisfactory if a Critical Element Step is out of order, or if more than about 20% of its steps are out of order. On the real test you must pass all five.</p>' +
-      '<div class="row"><button class="btn" id="start">Start the 30 minutes</button></div></div>';
-    document.getElementById('start').onclick = startMock;
+      '<div class="row"><button class="btn" id="start">Tap-to-order exam</button>' + (canSpeak ? '<button class="btn" id="speak">Spoken exam</button>' : '') + '</div>' +
+      (canSpeak ? '<p class="muted small" style="margin-top:14px"><b>Spoken exam:</b> you say the steps out loud and the phone listens. Find a quiet spot, speak in full phrases, and say every step, including the ones you would only do with your hands. The phone can mishear, so you get to correct it before the score counts.</p>'
+        : '<p class="muted small" style="margin-top:14px">The spoken exam needs speech recognition, which this browser does not offer.</p>') + '</div>';
+    document.getElementById('start').onclick = function () { startMock(false); };
+    if (canSpeak) document.getElementById('speak').onclick = function () { startMock(true); };
   }
 
-  function startMock() {
-    mock = { skills: core.dealMock(), i: 0, answers: [], end: Date.now() + 30 * 60 * 1000, running: true, warned: false };
+  function startMock(spoken) {
+    mock = { skills: core.dealMock(), i: 0, answers: [], end: Date.now() + 30 * 60 * 1000, running: true, warned: false, spoken: !!spoken, said: [{}, {}, {}, {}, {}] };
     mock.tick = setInterval(tickMock, 1000);
-    showMockSkill();
+    if (spoken) { keepAwake(); showSpokenSkill(); } else showMockSkill();
   }
-  function stopMock() { if (mock) { clearInterval(mock.tick); mock.running = false; } }
+  function stopMock() { if (mock) { clearInterval(mock.tick); mock.running = false; stopListening(); if (mock.wake) { try { mock.wake.release(); } catch (e) {} mock.wake = null; } } }
+  function keepAwake() { try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (w) { if (mock) mock.wake = w; }, function () {}); } catch (e) {} }
   function fmt(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
   function tickMock() {
     if (!mock || !mock.running) return;
     var left = mock.end - Date.now(), t = document.getElementById('timer');
     if (t) { t.textContent = fmt(left); t.classList.toggle('low', left <= 5 * 60 * 1000); }
     if (left <= 5 * 60 * 1000 && !mock.warned) { mock.warned = true; var n = document.getElementById('fivemin'); if (n) n.hidden = false; }
-    if (left <= 0) { if (mock.widget) mock.answers[mock.i] = mock.widget.get(); finishMock(true); }
+    if (left <= 0) {
+      if (mock.spoken) { mock.answers[mock.i] = mock.keptText ? mock.keptText() : ''; stopMock(); showSpokenResults(true); }
+      else { if (mock.widget) mock.answers[mock.i] = mock.widget.get(); finishMock(true); }
+    }
   }
 
   function showMockSkill() {
@@ -509,6 +566,105 @@
     app.innerHTML = html; window.scrollTo(0, 0);
     document.getElementById('again').onclick = showMockIntro;
     document.getElementById('quiz').onclick = function () { go('quiz'); };
+  }
+
+  /* --------------------------- Spoken exam --------------------------- */
+  var ear = null; /* { rec, on, done:[finished session texts], cur:'', onText, onState } */
+  function currentTranscript() { return ear ? ear.done.concat([ear.cur]).join(' ').replace(/\s+/g, ' ').trim() : (mock && mock.answers[mock.i]) || ''; }
+  function stopListening() { if (ear) { ear.on = false; try { ear.rec.stop(); } catch (e) {} } }
+  function listen(onText, onState) {
+    var me = ear = { on: true, done: [], cur: '', started: false };
+    function open() {
+      var r = new SR(); me.rec = r; r.lang = 'en-US'; r.continuous = true; r.interimResults = true;
+      r.onstart = function () { me.started = true; onState('listening'); };
+      r.onresult = function (e) {
+        var t = ''; for (var i = 0; i < e.results.length; i++) t += e.results[i][0].transcript + ' ';
+        me.cur = t; if (ear === me) onText(currentTranscript());
+      };
+      r.onerror = function (e) {
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { me.on = false; onState(me.started ? 'paused' : 'blocked'); }
+      };
+      r.onend = function () {
+        me.done.push(me.cur); me.cur = '';
+        if (!me.on) return;
+        try { open(); } catch (err) { me.on = false; onState('paused'); }
+      };
+      r.start();
+    }
+    open();
+  }
+
+  function showSpokenSkill() {
+    var sk = mock.skills[mock.i];
+    app.innerHTML = '';
+    var card = h('<div class="card"><div class="meta"><span class="tag">Skill ' + (mock.i + 1) + ' of 5</span><span class="tag plain">Time left <span class="timer" id="timer">' + fmt(mock.end - Date.now()) + '</span></span></div>' +
+      '<p id="fivemin" class="crit" ' + (mock.warned ? '' : 'hidden') + '>Five minutes or less remaining.</p>' +
+      '<h1>' + esc(sk.name) + '</h1>' +
+      '<p class="muted small">Say every step out loud, in the order you would do it. Pauses are fine.</p>' +
+      '<div class="row" style="margin-top:0"><button class="btn" id="talk">Start talking</button><button class="btn ghost" id="next" hidden>' + (mock.i < 4 ? 'Done with this skill' : 'Done, finish exam') + '</button></div>' +
+      '<p id="state" class="small muted" style="margin-top:12px"></p><div class="context small" id="live" hidden></div></div>').firstChild;
+    app.appendChild(card);
+    var talk = card.querySelector('#talk'), next = card.querySelector('#next'), state = card.querySelector('#state'), live = card.querySelector('#live');
+    var kept = '';
+    function setState(st) {
+      if (st === 'listening') { state.innerHTML = '<b>Listening…</b>'; talk.hidden = true; next.hidden = false; }
+      else if (st === 'paused') { state.textContent = 'The phone stopped listening. Tap to keep going; what you already said is saved.'; talk.textContent = 'Keep talking'; talk.hidden = false; }
+      else if (st === 'blocked') { state.textContent = 'The microphone or speech recognition is blocked for this site. On iPhone, check Settings > Apps > Safari > Microphone, and that Siri & Dictation is turned on, then reload.'; talk.hidden = false; }
+    }
+    talk.onclick = function () {
+      if (ear) kept = (kept + ' ' + currentTranscript()).trim();
+      try { listen(function (t) { live.hidden = false; live.textContent = (kept + ' ' + t).trim(); }, setState); }
+      catch (e) { setState('blocked'); }
+    };
+    next.onclick = function () {
+      var t = (kept + ' ' + currentTranscript()).trim();
+      stopListening(); ear = null; mock.answers[mock.i] = t;
+      if (mock.i < 4) { mock.i++; window.scrollTo(0, 0); showSpokenSkill(); } else { stopMock(); showSpokenResults(false); }
+    };
+    mock.keptText = function () { return (kept + ' ' + currentTranscript()).trim(); };
+  }
+
+  function showSpokenResults(timedOut) {
+    ear = null;
+    var results = mock.skills.map(function (sk, i) { return { sk: sk, g: core.gradeSpoken(sk, mock.answers[i] || '', mock.said[i]) }; });
+    var passed = results.filter(function (r) { return r.g.pass; }).length;
+    var html = '<div class="card"><h1>' + (passed === 5 ? 'All five Satisfactory. That is a pass.' : passed + ' of 5 Satisfactory. The real test needs all five.') + '</h1>' +
+      (timedOut ? '<p class="crit">Time ran out.</p>' : '') +
+      '<p class="muted small">The phone matches what it heard against each step, so it can miss things. If you did say a step in the right place, tap <b>I said this</b> and the score updates. Be honest with yourself: the evaluator will not give you the benefit of the doubt.</p>';
+    results.forEach(function (r) { html += '<div class="result"><span><b>' + esc(r.sk.name) + '</b></span><span class="pill ' + (r.g.pass ? 's' : 'u') + '">' + (r.g.pass ? 'Satisfactory' : 'Unsatisfactory') + '</span></div>'; });
+    html += '</div>';
+    results.forEach(function (r, i) {
+      var seqs = core.seq(r.sk), thr = r.sk.steps.filter(function (s) { return s.kind !== 'seq'; }), said = mock.said[i];
+      html += '<div class="card"><div class="meta">' + skillTag(r.sk) + '</div>';
+      if (!r.g.words) html += '<p><b>The phone did not hear anything for this skill.</b></p>';
+      else if (!r.g.wrong.length) html += '<p><b>Every step heard, in order.</b></p>';
+      else html += '<p><b>' + (r.g.critFail ? 'A Critical Element Step was missed or out of place, which fails the skill.' : r.g.wrong.length + ' step' + (r.g.wrong.length > 1 ? 's' : '') + ' missed or out of place (this practice rule allows ' + r.g.allowed + ').') + '</b></p>';
+      r.g.autoWrong.slice().sort(function (a, b) { return a.n - b.n; }).forEach(function (s) {
+        var idx = seqs.indexOf(s), prev = idx > 0 ? seqs[idx - 1] : null, fixed = !!said[s.n], missed = r.g.heard[s.n] == null;
+        html += '<p class="small"' + (fixed ? ' style="opacity:.6"' : '') + '><b>' + (fixed ? 'Counted as said: ' : missed ? 'Not heard: ' : 'Heard out of order: ') + '</b>' + stepHtml(s) +
+          '<br><span class="muted">' + (prev ? 'It follows: "' + esc(prev.text) + '"' : 'It is the first step.') + '</span></p>' + (fixed ? '' : whyHtml(s)) +
+          '<p><button class="btn ghost said" data-i="' + i + '" data-n="' + s.n + '" style="min-height:40px;padding:8px 14px;font-size:14px">' + (fixed ? 'Undo' : 'I said this') + '</button></p>';
+      });
+      var missedThr = thr.filter(function (s) { return r.g.heard[s.n] == null; });
+      if (missedThr.length && r.g.words) html += '<p class="small muted"><b>Not scored, but worth saying or showing:</b> ' + missedThr.map(function (s) { return esc(s.short || s.text); }).join('; ') + '</p>';
+      html += '<details><summary class="small">What the phone heard</summary><p class="small">' + (esc(mock.answers[i] || '') || '<i>Nothing.</i>') + '</p></details>' +
+        '<details><summary class="small">Full sheet order</summary><ol class="small">' + seqs.map(function (s) { return '<li>' + stepHtml(s) + '</li>'; }).join('') + '</ol></details></div>';
+    });
+    html += '<div class="row"><button class="btn" id="save">Save to my weak spots</button><button class="btn ghost" id="again">New mock exam</button></div>';
+    var y = window.scrollY;
+    app.innerHTML = html;
+    if (mock.reviewed) window.scrollTo(0, y); else { window.scrollTo(0, 0); mock.reviewed = true; }
+    app.querySelectorAll('.said').forEach(function (b) {
+      b.onclick = function () { var m = mock.said[+b.dataset.i], n = +b.dataset.n; if (m[n]) delete m[n]; else m[n] = true; showSpokenResults(timedOut); };
+    });
+    var sv = document.getElementById('save');
+    if (mock.saved) { sv.disabled = true; sv.textContent = 'Saved'; }
+    sv.onclick = function () {
+      if (mock.saved) return; mock.saved = true;
+      results.forEach(function (r) { core.record(P, { skill: r.sk, steps: r.g.wrong }, r.g.pass); });
+      saveP(); sv.disabled = true; sv.textContent = 'Saved';
+    };
+    document.getElementById('again').onclick = showMockIntro;
   }
 
   showQuestion();
